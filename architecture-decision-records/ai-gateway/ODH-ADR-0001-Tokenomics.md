@@ -70,14 +70,15 @@ flowchart LR
     direction TB
         postgres[("PostgreSQL")]
         budget_service["Budget Service"]
-        talkback["Talk-Back<br>Component"]
  end
  subgraph obs["Observability"]
         loki["Loki"]
  end
+        talkback["Talk-Back<br>Component"]
 
     aigc -- manages --> praxis_pod
     aigc -- manages --> budget_system
+    aigc -- manages --> talkback
     praxis -- is allowed? --> sidecar
     sidecar -- check & deduct balance --> redis
     sidecar -- allow / deny --> praxis
@@ -99,7 +100,7 @@ Notes:
 - In the Praxis POD, AIGC also brings in the BSC (Budget Sidecar Container)
 - Praxis filter remains a PEP (Policy Enforcement Point). All budget calculations happen in the budgeting system (sidecar container and/or budget service)
 - Redis/Valkey is used for atomic balance counters and change notification Pub/Sub. The Budget Service publishes change notifications to Redis when configuration objects are updated; sidecars subscribe and fetch the changed objects from the Budget Service REST API. Configuration objects (policies, rates, budget definitions) are cached in the sidecar's memory, not stored in Redis.
-- The Talk-Back Component is a standalone service, deployed alongside the Budget Service, that keeps each user's/budget's Redis allowance up to date. It retrieves budget status from whichever system is the budget authority — the Budget Service by default, or an external metering platform when one is configured (see [Bring Your Own Metering](#bring-your-own-metering)) — and writes the resulting allowance into Redis. This is what makes the Budget Service itself replaceable: the sidecar and Praxis only ever read/write Redis and never need to know which system is authoritative. See [Talk-Back Component](#talk-back-component) for details.
+- The Talk-Back Component is a standalone service, deployed outside the Budget System, that keeps each user's/budget's Redis allowance up to date. It retrieves budget status from whichever system is the budget authority — the Budget Service by default, or an external metering platform when one is configured (see [Bring Your Own Metering](#bring-your-own-metering)) — and writes the resulting allowance into Redis. This is what makes the Budget Service itself replaceable: the sidecar and Praxis only ever read/write Redis and never need to know which system is authoritative. See [Talk-Back Component](#talk-back-component) for details.
 - To limit the number of dependencies, this proposal does not assume the existence of a pub/sub system such as Kafka. However, adding one later can be considered as a mechanism to control back pressure and provide ordering for deduplication. The OTEL Collector could also be a candidate for deduplication, but this ADR does not prescribe an OTEL Collector design. We assume that an existing OTEL Collector is used and that it is at least capable of receiving the usage events and propagating them to both the SoR as OTEL logs and to the Budget Service as CloudEvents. Usage-event distribution is unaffected by the Talk-Back Component — the OTEL Collector always delivers CloudEvents directly to the Budget Service.
 
 #### Inference Flow (budget check)
@@ -232,7 +233,7 @@ The sidecar's hot path reads and decrements a balance in Redis; it never calls t
 
 ##### What It Does
 
-The Talk-Back Component is a standalone service, deployed alongside the Budget Service (not in the Praxis pod). It:
+The Talk-Back Component is a standalone service, deployed outside the Budget System and not in the Praxis pod — it is a peer of the Budget System, not a part of it, which is what lets it be pointed at an external metering platform instead of the Budget Service without that platform having to integrate with, or sit inside, the Budget System. It:
 
 | Responsibility | Description |
 |---|---|
